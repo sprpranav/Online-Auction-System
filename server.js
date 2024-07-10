@@ -1,4 +1,6 @@
 // server.js
+
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -13,8 +15,10 @@ app.use(cors());
 app.use(bodyParser.json());
 
 // Connect to MongoDB
-mongoose.connect('mongodb://localhost:27017/auction3', { useNewUrlParser: true, useUnifiedTopology: true });
-
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
 const db = mongoose.connection;
 db.on('error', console.error.bind(console, 'connection error:'));
 db.once('open', () => {
@@ -27,7 +31,6 @@ const userSchema = new mongoose.Schema({
   email: String,
   password: String,
 });
-
 const User = mongoose.model('User', userSchema);
 
 // Auction Schema
@@ -39,7 +42,6 @@ const auctionSchema = new mongoose.Schema({
   creator: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   imageUrl: String,
 });
-
 const Auction = mongoose.model('Auction', auctionSchema);
 
 // Multer setup
@@ -51,7 +53,6 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${file.originalname}`);
   },
 });
-
 const upload = multer({ storage });
 
 // Ensure uploads directory exists
@@ -65,9 +66,10 @@ app.post('/api/users/register', async (req, res) => {
   try {
     const user = new User({ name, email, password });
     await user.save();
-    res.status(201).send({ message: 'User registered successfully' });
+    res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
-    res.status(500).send({ message: 'Registration failed' });
+    console.error(error.message);
+    res.status(500).json({ message: 'Registration failed' });
   }
 });
 
@@ -75,27 +77,31 @@ app.post('/api/users/register', async (req, res) => {
 app.post('/api/users/login', async (req, res) => {
   const { email, password } = req.body;
   try {
-    const user = await User.findOne({ email, password });
-    if (user) {
-      res.status(200).send({ user, message: 'Login successful' });
-    } else {
-      res.status(400).send({ message: 'Invalid credentials' });
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
     }
+    if (user.password !== password) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+    res.status(200).json({ message: 'Login successful' });
   } catch (error) {
-    res.status(500).send({ message: 'Login failed' });
+    console.error(error.message);
+    res.status(500).json({ message: 'Login failed' });
   }
 });
 
 // Create Auction Route
 app.post('/api/auctions', upload.single('image'), async (req, res) => {
-  const { title, description, currentBid, endDate, creatorId } = req.body;
+  const { title, description, startingBid, endDate, creatorId } = req.body;
   const imageUrl = req.file ? req.file.path : null;
   try {
-    const auction = new Auction({ title, description, currentBid, endDate, creator: creatorId, imageUrl });
+    const auction = new Auction({ title, description, currentBid: startingBid, endDate, creator: creatorId, imageUrl });
     await auction.save();
-    res.status(201).send({ message: 'Auction created successfully' });
+    res.status(201).json({ message: 'Auction created successfully' });
   } catch (error) {
-    res.status(500).send({ message: 'Creating auction failed' });
+    console.error(error.message);
+    res.status(500).json({ message: 'Creating auction failed' });
   }
 });
 
@@ -103,9 +109,10 @@ app.post('/api/auctions', upload.single('image'), async (req, res) => {
 app.get('/api/auctions', async (req, res) => {
   try {
     const auctions = await Auction.find().populate('creator');
-    res.status(200).send(auctions);
+    res.status(200).json(auctions);
   } catch (error) {
-    res.status(500).send({ message: 'Fetching auctions failed' });
+    console.error(error.message);
+    res.status(500).json({ message: 'Fetching auctions failed' });
   }
 });
 
@@ -114,11 +121,12 @@ app.get('/api/auctions/:id', async (req, res) => {
   try {
     const auction = await Auction.findById(req.params.id).populate('creator');
     if (!auction) {
-      return res.status(404).send({ message: 'Auction not found' });
+      return res.status(404).json({ message: 'Auction not found' });
     }
-    res.status(200).send(auction);
+    res.status(200).json(auction);
   } catch (error) {
-    res.status(500).send({ message: 'Fetching auction details failed' });
+    console.error(error.message);
+    res.status(500).json({ message: 'Fetching auction details failed' });
   }
 });
 
@@ -128,35 +136,30 @@ app.put('/api/auctions/bid/:id', async (req, res) => {
   try {
     const auction = await Auction.findById(req.params.id);
     if (!auction) {
-      return res.status(404).send({ message: 'Auction not found' });
+      return res.status(404).json({ message: 'Auction not found' });
     }
     auction.currentBid = currentBid;
     await auction.save();
-    res.status(200).send({ message: 'Bid placed successfully' });
+    res.status(200).json({ message: 'Bid placed successfully' });
   } catch (error) {
-    res.status(500).send({ message: 'Placing bid failed' });
+    console.error(error.message);
+    res.status(500).json({ message: 'Placing bid failed' });
   }
 });
 
 // Update Auction Route
 app.put('/api/auctions/:id', upload.single('image'), async (req, res) => {
-  const { title, description, currentBid, endDate, creatorId } = req.body;
-  const imageUrl = req.file ? req.file.path : req.body.imageUrl;
+  const { title, description, startingBid, currentBid, endDate, creatorId } = req.body;
+  const imageUrl = req.file ? req.file.path : null;
   try {
-    const auction = await Auction.findById(req.params.id);
+    const auction = await Auction.findByIdAndUpdate(req.params.id, { title, description, currentBid, endDate, creator: creatorId, imageUrl }, { new: true });
     if (!auction) {
-      return res.status(404).send({ message: 'Auction not found' });
+      return res.status(404).json({ message: 'Auction not found' });
     }
-    auction.title = title;
-    auction.description = description;
-    auction.currentBid = currentBid;
-    auction.endDate = endDate;
-    auction.imageUrl = imageUrl;
-    auction.creator = creatorId;
-    await auction.save();
-    res.status(200).send({ message: 'Auction updated successfully' });
+    res.status(200).json({ message: 'Auction updated successfully' });
   } catch (error) {
-    res.status(500).send({ message: 'Updating auction failed' });
+    console.error(error.message);
+    res.status(500).json({ message: 'Updating auction failed' });
   }
 });
 
@@ -165,16 +168,23 @@ app.delete('/api/auctions/:id', async (req, res) => {
   try {
     const auction = await Auction.findByIdAndDelete(req.params.id);
     if (!auction) {
-      return res.status(404).send({ message: 'Auction not found' });
+      return res.status(404).json({ message: 'Auction not found' });
     }
-    res.status(200).send({ message: 'Auction deleted successfully' });
+    res.status(200).json({ message: 'Auction deleted successfully' });
   } catch (error) {
-    res.status(500).send({ message: 'Deleting auction failed' });
+    console.error(error.message);
+    res.status(500).json({ message: 'Deleting auction failed' });
   }
 });
 
 // Serve images
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: 'Something went wrong!' });
+});
 
 // Start the server
 const PORT = process.env.PORT || 5000;
